@@ -224,7 +224,7 @@ Three rules:
 **`screen` is the joiner's paint — and the ONLY thing a warm attach seeds.** There was briefly a
 second source: a `warm-history` seed that hydrated every `fresh:false` attach from tmux's own
 scrollback (`transport.captureHistory`). That whole hydration is **gone** — tmux owns the mouse and
-the scrollback again (see CLAUDE.md, "Terminal session continuity"), so it redraws the pane and its
+the scrollback again (see [Terminal emulation](terminal-emulation.md#seeding-a-fresh-xterm)), so it redraws the pane and its
 history is scrollable in place; hydrating on top of a screen *painter* is what produced the black
 bands and duplicated screens. A solo warm reattach therefore seeds **nothing**, and `seedPaint`'s
 `create-screen` — this capture — is the one seed a `warm-attach` can still yield, for the one client

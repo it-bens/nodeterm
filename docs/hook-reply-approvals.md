@@ -194,3 +194,16 @@ structured answers from the phone are an iOS follow-up.
 - "Always allow" via hook `updatedPermissions`.
 - codex/gemini permission hooks (unverified decision contracts).
 - The desktop notch/HUD overlay (separate feature).
+
+## Question and child-hook attention bookkeeping
+
+How the core mirror keeps pending attention correct when a parent question and child (subagent) permissions overlap. Also summarized in [hook model](hook-model.md).
+
+- An unanswered Claude `AskUserQuestion` is correlated by session and tool-use ID in the core mirror, independently of its short-lived display stash. Ordinary hooks, subagent activity and unrelated transcript results must not clear attention or archive its inbox card. Both shells use `recordQuestionResult` for transcript rescue (including Escape or decline), and broadcast the mirror's effective event. Keep result IDs through local and SSH tails; a boolean "some tool finished" is insufficient. Explicit new user turns, interrupts and session boundaries reset it.
+- Claude child `PreToolUse`, `PostToolUse` and `PostToolUseFailure` hooks must not drive parent state. Child `PermissionRequest` and attention `Notification` hooks still reach needs-you and phone approvals, including the raw approval summary and deterministic reply ticket. Keep raw summary recording before the child transcript-association guard in both shells.
+- A held parent question can overlap child permissions: retain its question card and waiting state while publishing each approval ticket separately. Approval replies resolve only their own ticket; the picker stays pending until its correlated answer or explicit reset. When the parent answers first, retain concurrent approval tickets and blocked attention until their own replies; ordinary tool activity cannot settle them. Explicit turn and session resets still cancel both kinds of pending attention.
+- Held approval attention must not replace subagent, recurring or background-task events, or refresh state evidence from those lifecycle hooks. A parent may ask several questions while a child ticket is outstanding: track each new picker and preserve child approval cards independently, including when their display titles match. Answering either resolves only that question or ticket.
+
+## Contract for decision JSON
+
+Hook decision JSON is built in core, never in the renderer or the script. To answer a held Claude permission request with more than `allow` or `deny` (a plan's follow-on mode, a question's answers), send a `PermissionAnswer` through `answerPermission`; `core/agents/permission-decision.ts` validates it against the pending request file on the agent's host and writes the JSON. The managed hook prints a JSON answer only after a strict prefix, size and one-line check, so a new decision shape must pass `isBoundedAnswerContent` or it is silently ignored. Answer content never goes on an argv. (The six numbered rules of the structured-answer contract are in "Plans and questions" above and in [hook model](hook-model.md).)

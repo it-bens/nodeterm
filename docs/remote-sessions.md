@@ -628,3 +628,65 @@ should be filed the day 4c merges.
 Mixed-home canvases; an offline edit queue; >LWW conflict semantics (Stage 3's
 documented races carry over); voice/video; follow mode; guest/read-only roles;
 license enforcement changes (open decision above).
+
+## SSH projects: tmux on the remote host
+
+Rules for the remote tmux that SSH-project terminals run in. The local tmux model is in [tmux continuity](tmux-continuity.md); the cold-restore rules are in [terminal lifecycle](terminal-lifecycle.md).
+
+### Every remote tmux invocation starts with `remoteTmuxPathPrologue()`
+
+`shared/ssh.ts`. It APPENDS to PATH: `/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`, `$HOME/.local/bin`.
+
+- An ssh exec channel gets a non-login shell, and on a macOS host Homebrew's `shellenv` lives in `~/.zprofile`, so a host whose own terminal runs tmux fine answered `zsh:1: command not found: tmux` to every command of ours (issue #449, the same class as the remote claude probe's login-shell + PATH fix).
+- Append, never prepend: a PATH that already resolves tmux keeps exactly that binary, so nothing re-pairs a long-lived tmux server with a different client build.
+- When tmux is genuinely absent the interactive spawn (`tmuxOrExplain`, `control-master.ts`) prints what is missing, how to install it and what a tmux-less remote loses, then degrades to a plain login shell, mirroring the local plain-shell fallback. The raw `command not found` line must never be the user-facing error again.
+
+### One tmux socket per host, whichever side opens the project
+
+An SSH project's sessions live on the host's `node-terminal` socket, the SAME socket a nodeterm running ON that host uses (`RMT_TMUX_SOCKET === TMUX_SOCKET`, pinned by `core/remote-ssh/unified-socket.test.ts`). Both sides read the same `.nodeterm/project.json` and name every session `nt-<nodeId>`, so the socket was the only thing keeping them apart. With its own `nodeterm-rmt` socket (2026-06 to 2026-11) a canvas opened locally on the server and the same folder opened over SSH from a laptop were two tmux servers holding same-named sessions that never saw each other, and every switch of machines cold-restored into a fresh shell (field report; issue #1319 was the mobile half of it).
+
+- The original "never collide with the user's own tmux" rationale is satisfied by `node-terminal` already: the user's own tmux is on `default`.
+- `nodeterm-rmt` survives only as `LEGACY_RMT_TMUX_SOCKET`. The session-memory sweep, the dev-ports sweep, the reaper and the by-name kill still list it so sessions an older build left there stay visible as orphans and reapable/killable. Nothing is spawned or re-attached there (a node whose session is still on the legacy socket cold-restores onto `node-terminal`, exactly as after a host reboot, and the old one shows up in the session-memory panel as an orphan). Never spawn on it.
+- Do not give the SSH path a socket of its own again.
+- **Known limit, deliberately out of scope:** hook events reach ONE nodeterm, the endpoint baked into the session's env at creation, or the failover winner when that one is dead (`agents/hooks/managed-script.ts`). A session two machines share shows its RUNNING / NEEDS YOU badge on whichever side the hook reaches. The terminal and the work are shared, the badge is not yet.
+
+### SSH connect: the ControlMaster is published BEFORE its setup chain
+
+`connectOnce` (`main/remote-ssh/ssh-project.ts`) used to publish a project's ControlMaster only with `status: 'connected'`, i.e. after the reverse hook tunnel, about 23 serialized per-agent hook installs, `printf $HOME`, the remote tmux.conf write plus `source-file` and the Codex runtime staging had all run. MEASURED against a real sshd through a 25 ms one-way delay proxy (50 ms RTT): that chain is **3.54 s** on a fully-provisioned host, while **18 remote terminals attaching in parallel over a warm master paint in a median of 0.16 s** and are all settled by 0.71 s. So the attach was never the bottleneck: every terminal of a switched-to project simply sat in `resolveSshRemote`'s 20 s wait printing `[connecting to user@host…]` into a blank pane, for a transport that was ready the whole time.
+
+Two additive changes, and the rules that keep them safe.
+
+**The early signal.** The moment `ssh -O check` answers, `connectOnce` emits `SshProjectStatusEvent.masterControlPath` on a `connecting` event. `connected` keeps its exact meaning (the whole chain finished) and everything hanging off it (git routing, the remote claude probe, the tunnel resync, the connection banner) is untouched. The renderer keeps it in its own map (`useSshConn.earlyByProject`), **never in `byProject`**, which a dozen readers treat as "this project is connected".
+
+- **Only a node whose remote tmux session ALREADY EXISTS may act on it** (`PtyApi.remoteSessionConfirmed` to `RemoteSessionIndex.verdict`, the strict `present`-only half of the coalesced `tmux list-sessions` read `create()` already makes, so a warm switch pays no extra round trip). `new-session -A` on a live session merely attaches, and the two things the setup chain provides, the remote tmux config (`-f`) and the hook/account environment (tmux `-e`), are read at session CREATION only. A node whose session is ABSENT, **or whose host could not be read**, waits for `connected`: creating its session without the hook env costs it its agent-status badges silently, with no later event to repair it. That is why the index exposes a TRI-STATE (`present | absent | unknown`): `exists()` folds `unknown` into "exists" for its own caller, and this one needs the opposite fold. Decision logic is the pure `renderer/lib/sshRemoteWait.ts`; a cold node's wait is pinned by its own test.
+- **Never for an ADOPTED live-orphan master.** The tunnel-verification failure path may `-O exit` that master and rebuild it, which would kill a terminal that had attached over it meanwhile. The rebuild clears `reusedOrphan` and re-enters the loop, so a rebuilt master does publish.
+
+**The boot-time pre-warm** (`core/remote-ssh/ssh-prewarm.ts`, planner and runner pure and tested; wired in `main/index.ts`). The master for a project was dialed only when the user first switched to it, so the first visit of every app run paid the cold establish (**0.44 s** measured) plus the whole chain. `SshProjectManager.prewarm` dials the masters of OPEN SSH projects shortly after boot, **one host at a time** (a burst of fresh masters is what trips a host's `MaxStartups`; the `SshChildGate` caps exec children per control path and does nothing about logins).
+
+- **A pre-warm is SILENT, with no status event at all.** The user is by definition not looking (if they were, the active-project effect would have connected it loudly), so a failure must not raise the connection banner for a project they never opened. The mark is lifted the moment a real connect arrives for the same project, including one that coalesces onto the pre-warm's own in-flight attempt.
+- **It never prompts for a passphrase either** (`isQuietMasterPid`, main's prompt handler declines): a modal in front of a user who opened nothing is the loudest thing an SSH connect can do. That master fails auth quietly; the user's own connect spawns a new one and prompts normally.
+- **CLOSED projects are never dialed**, and neither is a project that already has a master or an attempt in flight. `closeProject` is non-destructive, so a closed tab is the user saying "not now".
+
+### When a freshness verdict was a GUESS: the late cold-start check
+
+The cold-restore rule that makes the remote freshness read safe is unchanged: only tmux's own exit 1 is evidence of absence, and every other outcome answers "exists", because a transport failure read as "cold" types `claude --resume …` into a LIVE agent pane. What that rule costs, and what this closes, is the other side of the fold.
+
+**The incident (measured on the reporting host, 2026-09-15).** The host's `nodeterm-rmt` tmux server died, so every remote session was gone. Ten minutes later a 108-node SSH project was opened and 107 sessions had to be created in one mount burst. sshd logged **757 `Accepted publickey` full logins in seven minutes**; on a healthy ControlMaster that number is about 0, because everything multiplexes over one connection. Under that pressure the freshness read times out, the fold answers "exists", `tmux new-session -A` CREATES an empty session, `fresh:false` skips cold restore, and the node sits at a bare shell with the user's conversation stranded on disk:
+
+```
+15:29 burst,  22 sessions: 18 claude /  4 bash  ->  82% resumed
+15:39 burst, 107 sessions: 41 claude / 66 bash  ->  38% resumed
+```
+
+Load-dependent, i.e. a race. Three changes, and the order matters: the first saves the conversation, the other two stop the burst that strands it.
+
+- **A second opinion, never a different fold.** `create()` reports `freshUnverified` when `fresh:false` came from an `unknown` verdict rather than a read. The renderer re-asks ONCE, after the attach has landed and the burst is over, and tmux settles it authoritatively: `#{session_created}` survives a `new-session -A` attach, so a session created within seconds of our own attach is one WE made (`PtyApi.sessionAge`, `remoteSessionAgeArgs`, which prints the stamp AND the host's `date +%s` on one line so the host's clock skew never enters the number). Every rule in `renderer/terminal/cold-self-heal.ts` is a refusal: never for a verdict that was READ (that would spend a round trip per warm node on every switch), never for an unknown age, never past the window, and never unless a SHELL still owns the pane (the same gate the hibernation wake and the resume-miss watcher keep). The scrollback replay is deliberately NOT re-run: by then tmux has painted the live pane, and writing a snapshot over it splices two points in time (the warm-attach seeding rule). The agent relaunch is what matters and is what runs.
+- **The per-node token write is coalesced, not gated.** `ensureRemoteNodeToken` does go through the `SshChildGate`: main wires `RemoteHooks` with the gated runner, so it queues like everything else. The real cost was that it is one round trip PER SPAWN for work the connect path already did (`materialiseNodeTokens` writes every node's token), competing for a budget of 6 for the whole burst. It now memoizes per (control path, node) for the app run, seeded by the connect, and coalesces a burst into ONE remote write.
+- **Remote pty spawns are paced** (`core/remote-ssh/pty-spawn-gate.ts`, cap 4 per ControlMaster). A pty deliberately never went through the `SshChildGate` ("a terminal is never queued for a screen the user is looking at"), which is right for a handful of terminals and wrong for a canvas. The one thing that makes pacing acceptable is that a slot is held only until the session starts painting: released on the pty's FIRST OUTPUT (one round trip for a warm attach) and unconditionally after `REMOTE_PTY_SPAWN_SETTLE_MS`, because a gate that can hang is worse than no gate. A node that ends up waiting SAYS so (`SLOW_REMOTE_SPAWN_NOTICE_MS`), for the same reason the `[connecting…]` line exists. Measured in the lab (real sshd, `MaxSessions 10`, 50 ms RTT, one warm master, 107 attaches):
+
+  | | full logins | panes painted | wall |
+  |---|---|---|---|
+  | ungated | 72 / 77 | 102 and 96 of 107 | 2.1 / 2.3 s |
+  | gated at 4 | **1** / **1** | **107 / 107** | 3.2 / 4.0 s |
+
+  Wall time is the price and it is the right trade: ungated, five to eleven panes never painted at all inside a 20 s budget, the same shape `remote-session-index.ts` reports for its own burst.

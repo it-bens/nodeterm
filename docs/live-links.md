@@ -1556,3 +1556,11 @@ Security hardening (findings L1–L6):
     MESSAGE survives, in a NAME it becomes 👩💻.
 109. **Stop all reaches a full link (L6):** fill a link's 10 viewer slots, then Stop all from another
     machine. Expect: the viewers see "The sharer stopped this live link." within about a minute.
+
+## Relay boundary and contributor rules
+
+A new broadcast channel needs no live-link change because viewers are quiet clients and never receive broadcasts. A new per-session PTY event needs an explicit `watcherEventAllowed` decision in `core/watch-link/watcher-policy.ts`: allow it only when its payload is the visible screen, never history. `pty:resync` remains refused for that reason. A new viewer cast stays refused until `watcherAccess` admits it deliberately.
+
+Never add link state to a node, a board or a canvas operation. Canvas synchronization and the canvas authority would publish it. `src/shared/watch-link/` is copied byte-for-byte into the viewer page repository: import only sibling modules and `tweetnacl`, use `import type` for type imports, and re-vendor any change. `isomorphism.guard.test.ts` enforces that boundary.
+
+A Control link's typed bytes reach only the node pane through `PtyManager.controlInput`. Never write them into a tmux client PTY, where the prefix could reach tmux, and never place them on a command line.

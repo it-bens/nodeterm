@@ -283,15 +283,15 @@ The restoration above only has something to restore if the modes ever reach an e
 pass the DEC private mouse-tracking modes (`?1000h`/`?1002h`/`?1006h`) or the alternate screen
 (`?1049h`) through to the terminal on its far side: it consumes them and repaints the screen in
 place. So neither the host's headless emulator nor the renderer's xterm ever enters mouse-tracking
-mode, xterm never forwards a wheel event to the pty, and — because ConPTY repaints rather than
-scrolls — xterm's own scrollback stays empty. In a full-screen TUI (Claude Code with
+mode, xterm never forwards a wheel event to the pty, and, because ConPTY repaints rather than
+scrolls, xterm's own scrollback stays empty. In a full-screen TUI (Claude Code with
 `/tui fullscreen`) the wheel and the trackpad do nothing and earlier conversation is unreachable.
 The canvas is not involved: the terminal container is already `nodrag nowheel`.
 
 node-pty 1.1.0 ships a newer ConPTY (`conpty.dll` + `OpenConsole.exe`, from the Windows Terminal
 project) and uses it instead of the OS one when spawned with `useConptyDll: true`. Both spawn sites
-— the session host (`src/session-host/session.ts`) and the PtyManager's direct `pty.spawn`
-(`src/core/pty-manager.ts`) — spread ONE helper, `windowsConptySpawnOptions()`
+, the session host (`src/session-host/session.ts`) and the PtyManager's direct `pty.spawn`
+(`src/core/pty-manager.ts`), spread ONE helper, `windowsConptySpawnOptions()`
 (`src/core/windows-conpty-dll.ts`):
 
 - **Where node-pty looks, exactly.** Not `third_party/`: the native `LoadConptyDll`
@@ -301,15 +301,15 @@ project) and uses it instead of the OS one when spawned with `useConptyDll: true
   helper walks the same list, stops at the first `conpty.node`, and answers `{ useConptyDll: true }`
   only when BOTH files sit in its `conpty\` subfolder. A DLL missing there is a THROWN spawn in
   node-pty ("Cannot find conpty.dll at …"), not a fallback, which is why the helper checks first.
-- **Fail-open.** Any other platform, a missing file, a resolve or fs error ⇒ `{}` — the inbox
-  ConPTY, and spawn options byte-identical to before. It never throws. Off Windows it touches no
-  file at all.
+- **Fail-open.** Any other platform, a missing file, a resolve or fs error returns `{}`, selecting
+  the inbox ConPTY and preserving spawn options byte-for-byte. It never throws. Off Windows it
+  touches no file at all.
 - **The files must be STAGED, because our build deletes them.** node-pty's own post-install copies
   `third_party/conpty/<version>/win10-<arch>/` into `build/Release/conpty/`, but our postinstall then
   runs `electron-rebuild -f`, i.e. `node-gyp rebuild`, whose `clean` removes `build/`. The rebuilt
   `build/Release/conpty.node` is the one node-pty loads, so `scripts/stage-conpty-dll.mjs` runs after
   electron-rebuild (postinstall and `npm run rebuild`) and copies the two files back beside it
-  (Windows only; x64 and arm64 — the arches node-pty bundles). Without it every Windows build would
+  (Windows only; x64 and arm64, the architectures node-pty bundles). Without it every Windows build would
   quietly run on the inbox ConPTY.
 - **Packaging.** The main process gets them through `asarUnpack` (`**/node_modules/node-pty/**`).
   The session host's own node-pty copy (`build.win.extraResources`) is an allowlist, and now names
@@ -319,7 +319,7 @@ project) and uses it instead of the OS one when spawned with `useConptyDll: true
   `scripts/patch-node-pty.mjs` patches the `useConptyDll` branches, and
   `src/session-host/windows-conpty.ts` reads `_useConptyDll` instead of assuming one.
 
-Unverified on a device (no Windows machine here): see "ConPTY selection — device checklist" below.
+Unverified on a device (no Windows machine here): see "ConPTY selection device checklist" below.
 
 ### Output ordering, flow ownership, and geometry
 
@@ -1096,7 +1096,7 @@ P5. **Eco on Windows**, with pwsh and with cmd as the default shell: idle → `/
     shell alone. Repeat with a native `claude.exe` and an npm `claude.cmd`; a node with an MCP child
     (`node` → `cmd /c` → `node`) is not misread as a shell; a `blocked` node is never exited.
 
-### ConPTY selection (bundled `conpty.dll`) — device checklist
+### ConPTY selection (bundled `conpty.dll`) device checklist
 
 Written and unit-tested on Linux; nothing below has run on Windows yet. Run each on **Windows 10
 22H2 (19045)** and on **Windows 11**, packaged build:
@@ -1121,7 +1121,7 @@ C7. **Teardown leaves no `OpenConsole.exe`.** Close a node with ×, End session,
 C8. **Fallback.** Delete `build\Release\conpty\conpty.dll` from a packaged install's session-host
     copy: terminals still open (inbox ConPTY), they just lose C2.
 C9. **P4 with `useConptyDll`.** The per-session session-host cost of P4 above, measured again with
-    the bundled ConPTY — `OpenConsole.exe` replaces `conhost.exe`, and the memory panel's host line
+    the bundled ConPTY: `OpenConsole.exe` replaces `conhost.exe`, and the memory panel's host line
     must still count it (P3's parentage check, for `OpenConsole.exe`).
 
 ### Earlier items
@@ -1164,3 +1164,44 @@ run history, and one-way UI writers surface it. An older host refuses this comma
 its sessions; there is no fallback to `sendKeys`, raw input, or automatic restart. Legacy
 clients retain their existing `sendKeys` wire contract. No real Windows TUI measurement is
 claimed by the fake-PTY regression fixtures.
+
+
+## Platform invariants outside the host protocol
+
+### Windows-native agent launches
+
+Agent launch lines are POSIX source. A prompt-bearing builtin agent node retains `data.launchIntent`, bound to its exact `initialCommand` and never serialized. On a local win32 session-host pane whose host records a `pwsh`, `windows-powershell`, or `cmd` dialect, `core/launch-intent-execute.ts` routes the launch through `prepareAgentLaunch` and `sessionHostExecuteLaunch` (`pty:execute-launch`) instead of typing the POSIX line. Every other pane answers `unsupported-shell` and preserves the typed line byte-for-byte. Only a pre-delivery refusal may fall back to typing; `delivery-failed` never does.
+
+Run configurations (`launch.json` run nodes) are disabled for process launches on a Windows core. The launcher is a POSIX `sh` script controlled by POSIX signals. `gateEntriesForPlatform` marks entries unsupported with `RUN_WINDOWS_REASON`; the add menu and Dock disable the row, the palette hides it, and the decision uses `useCoreIsWindows`. Browser configurations and browser-only compounds still run. A PowerShell launcher is follow-up work.
+
+A new prompt-bearing launch site uses `createLaunchWriter`, so a Windows-native pane can execute `data.launchIntent` through `pty:execute-launch`. If an input is not represented by the core planner, exclude it in `heldLaunchIntentFor`; otherwise the Windows pane launches without that input.
+
+### ConPTY and platform-neutral filesystem rules
+
+Windows terminals use node-pty's bundled ConPTY when it is installed: `windowsConptySpawnOptions` and `src/core/windows-conpty-dll.ts` feed both `pty.spawn` sites. Windows 10's inbox ConPTY loses mouse tracking and alternate-screen modes, making a fullscreen TUI unscrollable. The required `conpty.dll` and `OpenConsole.exe` live in the `conpty/` directory beside node-pty's loaded `conpty.node`; `scripts/stage-conpty-dll.mjs` restages them after `electron-rebuild` removes `build/`. Missing files deliberately select inbox ConPTY. See the device checklist in this document's [ConPTY section](#which-conpty-node-ptys-bundled-one-inbox-as-the-fallback).
+
+New code is platform-neutral by default. Do not assume POSIX paths, separators, absolute paths, sockets, or file-link syntax. Publish files through `renameAtomic` / `writeFileAtomic` (`src/core/fs-atomic.ts`), never a bare `fs.rename`; `src/core/fs-atomic.guard.test.ts` enforces this. Resolve file dialects from the filesystem-owning core's platform, not the viewer's. Gate one-platform tests with `it.skipIf(process.platform === 'win32')` (or its inverse) and explain why. The `windows-latest` job runs platform-dependent suites on real Windows.
+
+`.gitattributes` sets `* text=auto eol=lf`; line endings are not a contributor-local Git choice. Without it, Git for Windows' default `core.autocrlf=true` produces CRLF checkouts, and tests that slice a checked-in file using `\n` literals miss their target. The regression reported 25 missing theme tokens that were present. Attributes apply only after re-checkout, so readers also normalize with `readFileSync(..., 'utf8').replace(/\r\n/g, '\n')`; `src/shared/line-endings.guard.test.ts` rejects an unnormalized read. `*.bat`, `*.cmd`, and `*.ps1` deliberately retain CRLF because `cmd.exe` is not reliably tolerant of LF.
+
+PATH lookup and direct execution differ on Windows. `findInPathString` correctly follows `PATHEXT`, so an npm CLI can resolve to `<name>.cmd`, but Node's `execFile` / `spawn` cannot execute that path directly (`spawn EINVAL`). App-owned subprocesses pass resolved executable plus argv through `directExecutableInvocation` (`src/core/exec-path.ts`), which invokes `.cmd` through a hidden `cmd.exe` with explicit escaping, verbatim arguments, and delayed expansion off. Never replace it with `shell:true`: commit prompts and other user-controlled arguments would become shell syntax. For `.cmd` wrapping, the helper rejects CR/LF/NUL in argv and command lines over cmd's real 8,191-character limit. It refuses `.bat`/`.ps1`; other executable types retain direct invocation. Keep stdin a byte stream into the shim; a PowerShell 5.1 `$input | & node` pipeline corrupts Unicode and line endings.
+
+### Windows messaging probe budget
+
+Both Windows owner reads, persistent session host and direct ConPTY, use `WINDOWS_PANE_PROBE_TIMEOUT_MS`, derived from the cold probe-worker deadline (6 s), one-shot fallback (4 s), and an IPC margin (1 s). Change the source deadlines in `session-host/windows-probe-budget.ts`, never a literal. SSH and tmux retain their 2 s bound. Both shells forward the optional budget with `ptyPaneProbeDeps`, binding the read and its timeout together; an optional dependency that is not forwarded fails silently.
+
+### Session-host interoperability and delivery
+
+Anything tmux supplies on POSIX needs an explicit session-host equivalent on Windows. The two delivery paths are not symmetric: `sendText` on POSIX uses `tmux paste-buffer -p`, which frames from the pane's real bracketed-paste state and submits with a separate `send-keys Enter`. The session host once sent `text + '\r'` in one raw write; a paste-aware composer consumed the Enter as pasted content and left the injected prompt unsent (issue #686). Before adding delivery, a probe, or a pane query, inspect the tmux leg and implement the host counterpart. The host can often be more exact because its headless emulator sees the pane app's own bytes; see [terminal emulation](terminal-emulation.md) for the deliberate inverse case.
+
+An xterm-shaped buffer never takes raw `tmuxScrollback`: tmux stores used cells, while the renderer, session host emulator, and `NativeWindowsPane` allocate every full-width line. Use `xtermScrollback` from `src/shared/scrollback.ts` (maximum 10k) so the host never retains history the renderer cannot show.
+
+The app's environment is not the panes' environment. `buildPtyEnv` strips the explicit `TMUX` and `NESTED_AGENT_ENV_STRIP` list inherited from the process that launched nodeterm. Add a measured name to that list rather than a prefix sweep: `CLAUDE_CONFIG_DIR` and `CODEX_HOME` select managed accounts and must survive.
+
+A new session-host push frame must be negotiated at `hello`, never just sent. An older `SessionHostClient` reads every push frame whose `type` is not `data` as an exit, and a long-lived host can outlive its app. Add capability to `SESSION_HOST_FEATURES`, send only to sockets that listed it, and pin the behavior against the real bundled host as `session-host/geometry-host.test.ts` does for the `geometry` push. The same applies to richer replies: `listSessions` rows require `sessionDetails`; an old host's `{names}` means named but not described, never detached or no processes.
+
+On Windows, resolve Git Bash through `resolveWindowsSh` (`src/core/windows-sh.ts`) when POSIX `sh` is necessary. A stock Git install commonly puts only `Git\cmd` on PATH. The resolver walks Git's real layouts then PATH without WSL shims; the Codex hook wrapper uses the same candidate data. With no shell, say "Install Git for Windows". The setup runner also sets `CHERE_INVOKING=1` so Git Bash login mode keeps the project cwd. Do not type a chained command line into a user terminal because PowerShell 5.1 and cmd parse it differently: type one bare command and do the rest in process.
+
+Windows `sendText` uses `core/settled-text.ts` for native PTYs and session-host panes. Adjacent paste and Enter writes can be read as one burst, so the bounded screen check may return `pasted-not-submitted`; propagate that outcome to callers and tell the user to inspect the terminal. Never treat the truthy string as success or retry automatically. `true` means the requested writes completed, not that a turn began. The versioned `sendKeysV2` request refuses old hosts with no fallback or restart. A collapsed, hidden, or oversize paste may require manual Enter. Device testing remains required.
+
+Delayed Windows message submission rechecks the attested child process and birth time plus emulator paste mode immediately before Enter, not merely the surviving PTY root. A missing host reply after transmission is uncertain delivery, never a pre-paste refusal; show the no-resend warning. The SessionStart idle-rescue latch is scoped to the same nonempty session and agent identity; a foreign idle must not publish new proof to the renderer. `core/windows-delivery-safety.test.ts` and mirror/client suites cover these boundaries.

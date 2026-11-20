@@ -124,3 +124,14 @@ suite:
 10. Windows: from a Copilot node run `& "<userData>\canvas-control\nodeterm.cmd" list` (the line
     the canvas skill now gives it) and a `--prompt "two words"` open; both arrive intact.
 
+
+## Chat view reader: rules and scope
+
+Details of `core/copilot-chat.ts` beyond the measurements above (copilot 1.0.88, plus the CLI's own `schemas/session-events.schema.json`).
+
+- It reads `<COPILOT_HOME>/session-state/<id>/events.jsonl`, then the snap package's `~/snap/copilot-cli/common/.copilot`. The journal is located STRICTLY by the node's session id and routed by `capabilityAgentId` before anything claude-shaped, so a missing journal is "not found", never claude's cwd-newest or another session.
+- The journal is append-only JSONL (compaction appends), so it PAGES like claude's: `parseChatWindow`/`parseGrowingWindow` take copilot's record parser, and the phone gets the same pages over the relay (`page()` gates only on `canChat`).
+- Shown: typed prompts (`content`, never `transformedContent`; the sources copilot's own timeline hides stay hidden), assistant text, tool calls with results (`Error: …` on failure), a user's `!` shell command as the `!` part, `Error:`/`Warning:`/`Info:` notices, and `model`.
+- Never shown: the system prompt, reasoning, sub-agent events (envelope `agentId`, `data.agentId`, `data.parentToolCallId`).
+- Not supported: remote (SSH) nodes (`unreadable`, "not supported yet", never this machine's disk), `effort` (not recorded), plan/question answer cards (claude-only), composer model labels (claude's picker commands only).
+- Golden fixtures: `src/shared/chat-fixtures/copilot/`.

@@ -304,7 +304,7 @@ list for both would light the rename UI on a node where the write silently does 
 `readAgentSessionName` routes codex to its own reader **before** claude's: claude's resolver SCANS
 `~/.claude/projects` on a cache miss, and its cwd fallback can hand back a stranger's session name.
 Both shells' session-name sweeps take core's `supportsTitleRead` default, so codex is enrolled in
-both without either shell being edited (the two drifted once before — see CLAUDE.md rule 10).
+both without either shell being edited (the two drifted once before, as [Adding an agent](adding-an-agent.md#not-writing-the-same-rule-twice) describes).
 
 ---
 
@@ -397,7 +397,7 @@ come first. Items 1, 2 and 5 fall out of a single capture run on one fresh node.
    **no chip and no banner at all** (not a `plain codex` chip — the launcher must never have run).
 2. **`codex resume <id> <prompt> --ask-for-approval never` accepts a positional prompt AND a global
    flag after the subcommand.** This is the composed line `createAgentNode` builds, and it is
-   CLAUDE.md rule 5's grok-`--` lesson exactly: a `withPermissionMode` unit test passes while the
+   the grok-`--` lesson in [Adding an agent](adding-an-agent.md#measuring-the-cli): a `withPermissionMode` unit test passes while the
    composed line is wrong. Create a Codex node with an initial prompt while the permission mode is
    anything but `manual`, and confirm the prompt reaches the model and the flag is honored (not
    swallowed into the prompt text, not a usage error).
