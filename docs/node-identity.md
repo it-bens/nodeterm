@@ -588,3 +588,66 @@ pane-recycle glue behind a live switch, and the remote-host account **lifecycle*
    account overwrite each other's token dir (§What this does NOT fix) and the loser loses remote
    canvas control outright, on a date nobody will connect to the symptom. Each `legacy` row is a
    thing to fix *before* the date, not a permanently safe landing.
+
+## Endpoint discovery, ownership and the browser guard
+
+Additional rules for the shared endpoint walk and the hook listener, beyond the token resolver (#384) and the stale-endpoint walk (#445) described above. See also [hook model](hook-model.md).
+
+### Per-node identity, restated
+
+The shared bearer proves "a session on this machine", never which session, so every node also gets a capability derived from one restart-stable secret (`kid.mac`, a domain-separated HMAC over the node id, code in `src/core/agents/node-auth-*.ts`, `node-token-*.ts`, `node-identity-policy.ts`). It is handed to the client as a 0600 file and verified three ways: `verified`, `legacy`, `forged`. `legacy` means "we cannot judge this", not a failure.
+
+### Credentials and the examples we show
+
+A credential never rides argv, local or SSH. Measured 2026-08-13: `buildPtyEnv` put the hook bearer in the tmux `-e` argv, which lands in a long-lived tmux client's `/proc/<pid>/cmdline` at mode 444 on a stock Linux with no `hidepid`. Combined with `open-terminal --cmd` not being in the confirm-gated `DESTRUCTIVE` set, that was arbitrary command execution as the victim from any account on the box. A remote command line is argv on both ends, so the same rule binds every `ssh` and `curl` we generate. Credentials travel by 0600 file or by stdin (`curl --config -`, already house style in `usage/remote-claude-usage.ts` and `codex-identity-proxy.ts`). Never add an argv fallback "for old curl". The rule also covers the examples we show users to copy: the push webhook's curl pipes its header on stdin, and a test runs it under `/bin/sh` to prove it, because a user pastes what we print into a CI job on a shared runner.
+
+### A shell that forwards this identity cannot be type-checked into correctness
+
+A handler that destructures the request without `agent`, and a record write that omits its optional trailing argument, are both well-typed. The whole dimension can be plumbed through core, the route, the launcher and the prelude, pass `npm run typecheck` and every unit test, and ship inert. `main/codex-identity-record-wiring.test.ts` pins it at source level, the same remedy `hook-verified-parity.test.ts` uses for the same class of hole.
+
+### Control and context discovery keeps a node capability as a routing rule, not an ownership proof
+
+- A dead Desktop SSH tunnel must not redirect a command to a local Server Edition: its unsupported-edition response describes the wrong instance. The two shims use `nt_adopt_for_node` (`core/agents/hook-endpoint-failover-sh.ts`).
+- The reference value is read from the primary endpoint's own token dir only (the one it advertises, else the adjacent `node-tokens`), never from the global search `nt_read_node_token` walks. That search exists to present a capability (#384); as a reference it let a Server Edition that opened the same `project.json` supply the "owner's" token whenever the desktop's token write had failed.
+- Once that dir exists, a candidate must hold the same value in its own dir. When the reference is empty (the write failed), a value proves nothing (a Server Edition that never heard of the node holds nothing too, and `"" = ""` relayed its permanent refusal, measured in review), so the candidate's token dir must be the same real directory (`pwd -P`) instead. Only a session with no such dir at all keeps legacy discovery.
+- What a match shows is that the candidate reads the same token file for this node. On an SSH host that file is shared per unix account (`remote-hooks.ts`, known limitation), so two desktops driving one account are indistinguishable here, and the receiving server still authorizes every request.
+- Actual owning-endpoint refusals remain final. Skipped foreign candidates do not consume the three-attempt budget, and a skipped candidate restores the previous endpoint vars (the codex sandbox hint names `$NODETERM_HOOK_SOCK` as the socket to allow). Hook event delivery retains its existing independent failover policy.
+- **Every fallback candidate is probed before the real POST** (`nt_probe_endpoint`: `/hook/verify`, 204 on the bearer alone on every server build, `--connect-timeout 0.5 --max-time 1.5`). A reverse tunnel whose sshd outlived the desktop's connection accepts and never answers, and once the foreign Server Edition stopped absorbing the walk, a call posted straight into such a socket hung. The bound is on the probe only: the primary is never probed and every real POST stays unbounded, because a confirm-gated verb waits for a human. Never put a timeout on the real POST. The probe writes into `$nt_out` like the POST would, so a 421 at the probe still prints its body (into `/dev/null` it left the control shim exiting 1 with an empty stderr), and the control shim names a final 421 with `CONTROL_UNREACHABLE_MSG` as the context shim does. Consequence: while sshd still holds the session's own tunnel socket, the primary POST itself still hangs, unbounded by design, for the dialogs.
+- **Measured on an SSH host (2026-09-28/29):** the desktop slept, the session's tunnel socket stayed on disk with no listener, and the walk reached an unrelated Server Edition whose `control-unsupported-on-this-edition … permanent … do not retry` (and, for context reads, "No linked nodes") was true about that server and false about the session. The tunnel came back minutes later.
+- When a foreign candidate was skipped and no owner answered, the shims print `FOREIGN_ENDPOINT_HINT` (the owning connection is unreachable, the state is temporary, the usual cause for an SSH project is the tunnel) instead of `STALE_ENDPOINT_HINT`, so a failure carries one retry advice, not two. Never let another instance's "permanent, do not retry" stand in for a dropped tunnel. With nothing foreign skipped, a primary that is an SSH tunnel file (`~/.nodeterm/hook-endpoint*.env`, the only files the desktop writes there) gets `TUNNEL_DOWN_HINT` (reconnect) instead of the stale-endpoint advice (app restart). Both hints open with the lead the bodies quote. All four agent-facing bodies quote that lead via `ownerUnreachableGuidanceLines`, because their other refusal lines rightly say "do not retry".
+- Tests: `src/server/control-owner-tunnel-down.test.ts` rebuilds that host under real `/bin/sh` with the real Server Edition handlers as the foreign endpoint; `src/core/owned-endpoint-walk.test.ts` pins the probe (hanging sockets), the owner reference, the single advice and the restore, each mutation-checked.
+
+### Endpoint failover details
+
+Restating the shared walk (`nt_candidates` / `nt_adopt`, issue #445) with the points not covered above:
+
+- The managed hook script had the bounded candidate walk (locals before tunnels, `nt_fallback_max` 3, token re-read from the adopted endpoint's dir); the two shims did not, so hook events healed themselves while every canvas-control verb died with "control endpoint unreachable". In the field, a reviewer launch was silently dropped.
+- Two server-side halves in `hook-server.ts`: a failed `listen()` un-wedges the singleton (it used to leave `this.server` set, making every retry a silent no-op at port 0), and `stop()` deletes only the endpoint contents this run published, so a failed start cannot erase another owner's advertisement. A crash skips cleanup, which is why clients still walk the candidates.
+- HTTP 421 means the bearer belongs to a different endpoint and is rejected before dispatch; it joins dead transport (curl `000` or empty) in the bounded discovery walk. A node-identity 403 or 400 remains final and is never re-sent to another instance. The walk is skipped under `CODEX_SANDBOX_NETWORK_DISABLED` for transport failures (#367); an explicit 421 proves transport worked and still permits discovery. The final error distinguishes "no endpoint anywhere" from "an advertised endpoint that is not listening" (`STALE_ENDPOINT_HINT`). Desktop quit calls `hookServer.stop()` on the second before-quit pass, after the flush window.
+
+### Hook endpoint ownership (#826)
+
+- Startup first probes every transport in an existing endpoint advertisement and preserves a live or uncertain owner. The local Unix listener probes its socket before cleanup. Only `ECONNREFUSED` plus the same device and inode permits removal; a live listener, non-socket, symlink or uncertain probe disables hooks without replacing its endpoint.
+- Both shells use `startForApp`: Desktop creates its window and then shows an actionable warning; the Server Edition logs the same warning and continues boot.
+- An authenticated owner must answer `/verify` with 204 for the advertised bearer and reject a random bearer (403 or 421); unrelated HTTP responses are uncertain listeners, not authenticated nodeterm. Probes have a hard deadline.
+- Endpoint writes are atomic and stop removes only the run's own advertised contents.
+- SSH setup never removes a socket before binding: every forward gets a fresh random path, while discovery is stable per project plus installation identity hash. Only a verified replacement is advertised; then this run cancels its previous forward.
+- A legacy project endpoint is migrated only when its bearer matches the current run, the previous installation-qualified advertisement, or a stale conventional local advertisement retained at boot. Publication rechecks the snapshot digest, refuses symlinks, uses a migration lock and a private temp, and never places credentials in argv. Without ownership proof (including a first upgrade after the old local advertisement was deleted), it preserves the file and logs instructions to restart affected agent sessions; discovery still works but may incur the old dead-tunnel delay until then. Unit tests do not claim a real-host upgrade.
+- A reused tunnel that loses bearer verification emits hook-only health updates: the desktop shows a warning and clears it after repair, without reconnecting terminals.
+- These changes share the core listener in Desktop and Server Edition; the mobile wire protocol and node-identity rules are unchanged.
+
+### A browser is refused before the bearer is looked at
+
+`core/agents/hook-browser-guard.ts`. The bearer stays the real gate; this is the belt beside it, against the one caller that can reach a loopback port without being a process of ours.
+
+- A request carrying any `Origin` header, or a `Host` that is not `127.0.0.1` / `localhost` / `[::1]` (any port), gets 403 on both listeners, before the 403-versus-421 bearer distinction, so a DNS-rebound page learns nothing.
+- Measured, every shipped client passes: curl over the socket sends `Host: localhost` (the codex launcher's socket URL sends `localhost:0`); curl over TCP sends `127.0.0.1:<port>` (the SSH TCP fallback arrives with the host's port, hence any port); Node's `http` over the socket sends `localhost`; Node's fetch sends no Origin (but `sec-fetch-mode: cors`, so never refuse on that); Bun's fetch (opencode's runtime) sends no Origin. The SSH reverse tunnel forwards bytes, so a host-side curl's Host arrives unchanged. A request with no Host is let through (Node already answers 400 to an HTTP/1.1 one; no browser sends one).
+- A new client must send no Origin and a loopback Host. `hook-server.browser-guard.test.ts` drives the real transports and goes red otherwise.
+
+### `~/.nodeterm` on an SSH host is 0700
+
+`privateRemoteDirCommand`, run by `setup()` on every connect and tunnel repair: created under `umask 077` and an existing one tightened, never through a symlink, never a directory the login user does not own (`-O`, which only a root login needs). The secrets inside were already 0600 one by one; the umbrella is so a future file written there without a mode is not born world-readable in a traversable directory.
+
+### Facts already present above
+
+The `nt_read_node_token` resolver rules (#384), the no-keyring fallback (#1088), the strict-date latch and `forgetProvenNode` rule, and the "both raw listeners change together" invariant are stated in the sections above and are not repeated here.

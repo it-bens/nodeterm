@@ -394,7 +394,7 @@ key the bookmark was recorded with; `hosted-join.ts`), and normally only a human
 comparison sets it. `shareTeam.seedBookmark` is the one writer that sets it without one: it writes a
 new bookmark with `approvedAt` (labelled `source: 'ssh'`), or, when a bookmark for the same host id
 and host key already exists, sets `approvedAt` on it and keeps its device token and its label
-(`source: 'code'` stays `code`). `source` is a label only; nothing reads it to decide.
+(`source: 'code'` stays `code`). `source` is a label only; nothing reads it to decide. It rides the existing client bookmark auto-confirm, so it is not a sixth confirm site: the code it is given came back from `team bootstrap` over the project's own authenticated ssh channel.
 
 That is safe only because of what `seedBookmark` is given: the join code `team bootstrap` just
 returned over the project's own SSH channel, whose host key `known_hosts` already authenticated. The
@@ -505,7 +505,7 @@ session key** in the team store.
 
 | Channels | What a Viewer / Commenter may do |
 |---|---|
-| `pty:create` | Only for a node of a shared project. The options are rewritten to `persistKey`, `cols`, `rows` and `viewerId`, plus `joinOnly: true` and `sizeVote: false`. Everything else is stripped, including `sshRemote`, whose ssh args would run on the host during the existence probe. A join-only create that would spawn a new session answers `unavailable: 'join-only'`. |
+| `pty:create` | Only for a node of a shared project. The options are rewritten to `persistKey`, `cols`, `rows` and `viewerId`, plus `joinOnly: true` and `sizeVote: false`. Everything else is stripped, including `sshRemote`, whose ssh args would run on the host during the existence probe. A join-only create that would spawn a new session answers `unavailable: 'join-only'`. On the Windows session host the join-only viewer rides a read-only `watch-attach`: no geometry claim and no pause ticket, the host refuses its writes and resizes, it never spawns, and its session is a `watcherClient` (never indexed as the node's session). A host without the `watch-attach` feature refuses the viewer (`join-only`), never an ordinary attach; see [Windows session host](windows-session-host.md). |
 | `pty:resize` | Rewritten to "not looking" (`null, null`): a viewer's window never sizes the shared terminal. |
 | `pty:flow` | Resume only: a pause would freeze the shared process for everyone. |
 | `pty:kill` | Detaches the caller's own view; the session keeps running. |
@@ -1051,6 +1051,7 @@ The human `team status` reads `state`, `idle` and `lastError` together:
 - **Nothing is served before mutual approval.** A pre-approval request answers `E_UNAUTHORIZED`
   and never reaches a handler. Frames that arrive between approval and open (while the pin is
   written) are held (at most 256), then served through the same checks.
+- **LOCAL confirms have exactly three call sites on the host side:** the Team Access dialog (`relay:host:confirm`), `autoApprove` for a key `team.json` pins, and an owner's `relay:hosted:approve`. The joiner side has two: the human's `relay:client:confirm`, and the bookmark auto-confirm. The one remote confirm arrives only on the encrypted tunnel. A new local confirm is a design change; the comment in `src/core/relay/relay-trust.ts` lists all five.
 - **A leaked join code cannot let anyone in**: every device still needs an owner's approval. At most
   16 requests wait at once, one per device key, each for 10 minutes; the 17th is refused.
 - **A join code no longer takes hosting offline, once the host has proven its key** (ruling R44).

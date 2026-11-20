@@ -818,3 +818,30 @@ only exercises the HTTP/auth surface). With `npm run server:dev` running:
     parent node; click it to watch its live transcript stream.
 13. **Context meter (Phase 3b)** — as a Claude session accumulates transcript, the node's
     **context-window meter** should fill.
+
+
+## Server architecture and operational invariants
+
+The Server Edition is a plain `node:http` and `ws` shell around the shared core. `ServerPlatform` boots the same services as Electron, and a browser-side `window.nodeTerminal` shim speaks WS-RPC (`src/shared/rpc.ts`, `src/renderer/bridge/`). `src/server` must not import Electron or `src/main`; `src/server/no-electron.test.ts` enforces that. The renderer talks to main only through `window.nodeTerminal`, and `src/shared/ipc.ts` is the source of truth for channel strings.
+
+Phase 3a exposes the core filesystem, git, commit, and picker handlers through the browser bridge; those handlers execute on the server. Folder mode in the server picker can create directories, matching the native dialog's New Folder action. It shares `newEntryPath` with Explorer creation: do not add another path validator. Optional write dependencies hide the button for read-only callers. File mode never creates folders. Relay tabs create folders on the host, while SSH projects have their own `SshProjectDialog` path.
+
+Phase 3b boots the loopback hook server. Managed hook integration files follow user consent and the `installHooks` veto. `wireAgentStatus` broadcasts `agent:status`, `agent:subagent-activity`, and `context:update`; transcript read channels also work in the browser. Canvas control is opt-in through `NODETERM_SERVER_CANVAS_CONTROL=1` or `--canvas-control`: the server installs its own shim and runs serialized `HeadlessNodeFactory`; disabled remains the default. Its project writes broadcast `workspace:server-change`, not outside-edit events, so the renderer three-way merges its own server changes rather than showing a conflict bar.
+
+Process death and hangs are telemetry, never new triggers. Electron main logs `child-process-gone`, `unresponsive` / `responsive`, and `render-process-gone` to its debug ring; only the existing renderer crash reload remains. Register Electron child-process logging before `ready`, because the GPU can die during boot. Browser-side WebGL losses remain in the browser console, while Electron mirrors renderer console lines to its ring. App-initiated releases are counted but not logged per event.
+
+### Server sign-in rules
+
+The following security rules supplement the existing [Security model](#security-model):
+
+- Login reserves its per-client rate-limit slot before reading a body. The budget includes attempts in flight. Checked-before-body and charged-after-verify admitted all 60 held-body guesses in the audit repro. `Auth.beginLoginAttempt` settles each reservation once as success, failure, or abandonment.
+- Password verification uses asynchronous `crypto.scrypt` behind a two-slot FIFO gate. Never use `scryptSync`, which freezes terminal WebSockets.
+- Every `POST /auth/*` and WebSocket upgrade passes one same-origin rule in `src/server/origin.ts`. Put every new authentication POST beneath `/auth/` or it bypasses that rule.
+- Sign-out is server-side. `/auth/logout` deletes the presented session and `/auth/logout-all` deletes all sessions for a signed-in caller. `Auth.onSessionsRevoked` closes cookie WebSockets with 4401; heartbeat also closes an expired session.
+- Client identity is the TCP peer, or, only for loopback/private/CGNAT/link-local/ULA or configured trust networks, the LAST parseable `X-Forwarded-For` entry. Earlier entries were written by callers. An unusable forwarded header falls back to the TCP peer. IPv6 clients are grouped by /64. The global ceiling remains the backstop.
+- Header trust from loopback requires `NODETERM_TRUST_PROXY_SECRET`. The secret is environment-only and never logged. Without it, trusting loopback headers would let every local process impersonate the proxy.
+- `NODETERM_PUBLIC_ORIGIN` forces Secure cookies and HSTS. Without it, Secure follows `X-Forwarded-Proto`, and the first non-loopback Host logs a warning. Every response refuses framing through HTTP `frame-ancestors`; the app CSP is a meta tag where that directive does not work. Served `connect-src` is `'self'`.
+
+### Server build boundary
+
+A dependency with a native addon that Server Edition reaches is `--external:` in `server:build`. Hosts run `npm ci --ignore-scripts`, so no addon is compiled there and esbuild fails on unresolved `.node` imports (or a compiled addon with no loader). `src/server/server-build.test.ts` builds both views because no CI job builds the server bundle. The server resolves externals at runtime from `node_modules`.

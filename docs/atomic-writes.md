@@ -173,3 +173,45 @@ reports clean, which is the same class of silent failure as the bug.
 | **Desktop** (Electron) | Covered. Windows is the platform this exists for; on macOS/Linux the retry is inert and behaviour is unchanged. |
 | **Server Edition** | Covered for core stores — the helper is in `src/core`, so both shells get it. Its usual host is Linux, where the retry is inert, but a Windows-hosted server gets the same protection. The ControlMaster/scp manager is desktop-only. |
 | **Mobile companion** | No client change. It holds no local stores of its own, but the agent-status mirror it reads from an SSH host now arrives through the unique remote temp path. The transport shape is unchanged. |
+
+## Remote writes: the byte check, the helpers and the guards
+
+Details that complete the remote-write rules above.
+
+- **The incident.** On 2026-09-28 a host's `~/.nodeterm/nodeterm.sh` and `context.sh` were 0 bytes
+  after a reconnect, and every agent's canvas call exited 0 with no output. A bare
+  `cat > f && chmod 755 f` also flipped the mode 644 to 755 when the body never arrived, and the
+  temp + `mv` shape published the empty temp over a good file just the same (measured with the
+  master SIGKILLed and with the child SIGTERMed, both before the body).
+- **Empty generated bodies are refused.** `remoteAtomicWrite` allows them only when `allowEmpty`
+  is set. The generic `ssh-fs` write is the sole caller that passes it, because an editor may save
+  an empty file; nothing nodeterm generates is ever empty.
+- **`runRemoteAtomicWrite` throws on a non-zero exit.** The remote runners resolve on failure, and
+  awaiting them and moving on is what made the failure silent. A caller that does not use the
+  helper must check the result itself.
+- **Unreadable user files are never treated as empty.** The old `cat f || true` followed by
+  `cat > f` replaced an unreadable AGENTS.md with nodeterm's block alone. The local installers for
+  the same files use `writeManagedHookFileAtomic` / `mergeInstructionFile`.
+- **Guards.** `src/main/remote-ssh/remote-write.guard.test.ts` fails on any new bare `cat > <file>`
+  in `src/{core,main,server}`; `remote-write-truncation.test.ts` runs every installer under a real
+  `/bin/sh` with the body cut off.
+- **Never `chmod <mode> -- <file>` in a remote command.** BSD/macOS chmod does not permute: its
+  getopt stops at the mode operand, so the `--` after it is a file named `--` ("No such file or
+  directory", exit 1) and the `&&` chain never publishes. `mkdir -p --`, `mv -f --` and `rm -f --`
+  are fine, since their `--` comes before any operand. That spelling shipped from v0.3.3
+  (fbc65ad8) for the hook endpoint and node tokens, so `setup()` returned null on every macOS SSH
+  host and those hosts had no status hooks, canvas control or context link. To test it on Linux,
+  the real-shell tests put a non-permuting chmod (`POSIXLY_CORRECT=1` GNU chmod) first on PATH for
+  every mode-bearing caller.
+- **Canvas control and context link install as one chain** (`RemoteHooks.installAgentTools`). They
+  merge different blocks into the same AGENTS.md / GEMINI.md, and the transaction lets only one of
+  two racing writers publish a snapshot: fired side by side they lost 16 to 19 of 48 blocks over 8
+  fresh hosts.
+- **A new agent-facing doc on an SSH host goes into the agent-tools plan.** The canvas/context
+  shims, their skills and the instruction-file blocks are listed once in `remote-hooks.ts`
+  (`canvasControlArtifacts` and its siblings). The installers and the connect-time freshness check
+  (`RemoteHooks.refreshAgentTools`) both read that list, so a host is brought to the current
+  build's bytes on the next connect. A shim, skill or block written from anywhere else is written
+  once and never checked again, so hosts keep the old text across app updates. This is only for
+  those docs: hook scripts and hook config stay in `setup()`'s ordered chain, and the endpoint file
+  and node tokens carry credentials, so they never go on a freshness cadence.

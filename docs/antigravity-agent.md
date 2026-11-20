@@ -28,7 +28,7 @@ in every menu, header and card, and `brandPulsePlan` makes it the pulsing RUNNIN
 canvas and in the notch HUD.
 
 > Sibling documents: `docs/grok-agent.md`, `docs/gemini-agent.md`, `docs/copilot-agent.md`. The
-> distilled rules are **Adding a new agent** in `CLAUDE.md`.
+> distilled rules are in [Adding an agent](adding-an-agent.md).
 
 > **Where the facts come from.** Everything marked *measured* was run against the real `agy` 1.2.3
 > on Windows 11, in a temporary HOME, or measured on that machine with the code in this change.
@@ -338,8 +338,7 @@ folder, before any turn.
 an agy node, ⌘M therefore opens the rendered terminal OUTPUT (`TerminalMarkdownView`), never the
 conversation view, and the phone's Chat screen answers `unsupported` (its relay `page()` is gated on
 `canChat`). That is the honest answer until the record shapes below are captured. A parser written from the vendor's prose would map the user's and the
-model's text and then have to guess everything else, which is rule 14 of "Adding a new agent" in
-`CLAUDE.md`: a guess must degrade to nothing, never to something wrong. An unwired skeleton is not
+model's text and then have to guess everything else, which [Adding an agent](adding-an-agent.md#degrading-and-admitting-what-you-did-not-measure) requires: a guess must degrade to nothing, never to something wrong. An unwired skeleton is not
 shipped either, because a module whose only reader is its own test is a plan, not a feature.
 
 **Measured** (1.2.3, Windows; the hook payloads in
@@ -474,3 +473,9 @@ On Windows, run the same from Git Bash, where `~` is `%USERPROFILE%`.
     `invoke_subagent` child (does its step list land in the parent's file?). Also confirm that
     `compact.shape` carries `truncated_fields` and `full.shape` never does, and whether any
     environment variable relocates `~/.gemini/antigravity-cli` on macOS/Linux.
+
+## 9. Launch reachability gate and the no-chat-view rule
+
+- The launch-reachability gate (appending `findAgy()`'s directory to a local session's PATH) uses `capabilityAgentId`, so an Antigravity-based custom agent inherits it; plain terminals and SSH sessions do not. Detecting the binary only for hook installation would recreate the original split: a configured badge for an agent the pane cannot launch.
+- Hook installation is a file lookup (PATH, then the vendor's install dirs), never a spawn, in two passes per launch: the boot pass may only see the inherited PATH, so a miss there does nothing; after the login-shell PATH probe settles, a final pass repeats the lookup and only then withdraws a bundle of ours when `agy` is not found. An `agy` installed later gets the hook the next time nodeterm opens. Only entries under `.nodeterm/agent-hooks/` are swept as ours.
+- There is no conversation view and that is deliberate (not in `CHAT_CAPABLE`): the record shapes of `transcript_full.jsonl` were never captured, and a parser built from the binary's prose description would be a wrong guess, so none ships, not even unwired. When it lands: locate strictly by conversation id (`brain/` holds every conversation on the machine), and have a remote node answer `remoteOnly` and then unreadable, like gemini. The capture recipe is section 7.1 and 8.1.

@@ -237,8 +237,8 @@ cards and `at` timestamps are not supported. `/rename` joined `RENAME_CAPABLE` l
 
 ## Context meter (`USAGE_CAPABLE`)
 
-Source: the agent's OWN numbers (CLAUDE.md rule 6), not the `stop` payload's `input_tokens` /
-`cache_read_tokens` (no window there). The store's root protobuf field 5 is `token_details` {1
+Use the numbers the agent reports directly, as required by [Adding an agent](adding-an-agent.md#measuring-the-cli). The `stop` payload reports `input_tokens` and
+`cache_read_tokens` but does not report the context window. The store's root protobuf field 5 is `token_details` {1
 used_tokens, 2 max_tokens}; it matches the TUI's `/context`, and `max` varies per session (200000 /
 256000 / 300000 / 1000000), so it is read, never inferred. No `max`, no meter. Read by the one store
 reader (`readCursorStore` returns `tokens`; `rootMessageIds` and `rootTokenDetails` share one protobuf

@@ -159,5 +159,5 @@ both scoped to the shared project).
 ## Not in this version
 
 Live multi-user drawing (team sync is whole-node, last writer wins), agents reading a linked board
-(a follow-up), kanban cards (CLAUDE.md: non-session kinds are not cards), and Excalidraw's own
+(a follow-up), kanban cards (see [Node kinds](node-kinds.md#whiteboard)), and Excalidraw's own
 open/save-file actions (they fail in Electron; saving is ours).

@@ -4,10 +4,8 @@ A bottom-left **RAM pill** beside the usage pill, and the **session-memory panel
 much memory the machine the *active project* runs on is using, and which `nt-*` tmux session is
 holding it.
 
-> Design spec: `docs/superpowers/specs/2026-08-10-session-memory-panel-design.md`.
-> The condensed rules live in `CLAUDE.md` ("Session memory"); this document carries the
-> measurements, the reasoning that is too long for that file, and **§10, the device checklist** for
-> everything that could not be verified on the headless Linux box this was built on.
+> This document includes the measurements and the reasoning. **§10** lists device checks for
+> behavior not verified on the headless Linux build machine.
 
 Files:
 
@@ -188,7 +186,7 @@ pane's *shell*, so a claude session with two MCP servers reports **3**.
 A row's number is that whole tree. The line under it is how the tree splits: `claude 538 MB · 14
 other processes 1.2 GB`, two parts that add up to the row. It names the LARGEST process in the tree,
 which is usually the agent CLI and is what a reader wants either way when a total looks high. It says
-"processes", never "MCP": a plain `npm run dev` has them too.
+"processes", never "MCP": a plain `npm run dev` has them too. A process name is untrusted text (a process can retitle itself, and on an SSH host it may be another user's): `processLabel` (`core/session-memory.ts`) strips control and format characters, caps the length, and cuts only an ABSOLUTE path to its file name, because `npm exec @playwright/mcp@latest` is a title, not a path.
 
 ### Comparing the panel with other tools
 
@@ -385,8 +383,7 @@ previous machine's facts on a real change.
 - **Local scope** — the pill polls `HOST_POLL_MS` (30 s). One file read, free.
 - **SSH scope** — **never polled.** One read on scope entry, one when the project's ControlMaster
   comes up (an SSH project is opened before its master is ready, and with no timer behind it a first
-  read against a dead master would leave the pill blank), and one per panel open / `⟳`. This is the
-  rule `CLAUDE.md` already sets for remote usage, for the same reason.
+  read against a dead master would leave the pill blank), and one per panel open / `⟳`. This follows [Usage indicator](usage-indicator.md), “Remote usage”: on demand, never polled.
 
 **The full sweep never runs on a timer and never from the pill.** The panel is *unmounted* while
 closed and its mount is what triggers the sweep. One additional consumer follows the same rule:
@@ -644,3 +641,27 @@ Cadence and the other surfaces
     "Could not measure", with no local rows attributed to the host.
 27. Relay tab: the panel says session memory is not available there, and offers no ⟳.
 ```
+
+## Additional backend and safety rules
+
+**Use the panel's Pause action before ending a session.** The panel's `×` used to be the only control. On the reporting host on 2026-09-04, with 149 `nt-` sessions using 46 GB of tree RSS, the median session with a live `claude` used 321 MB and one whose CLI had exited used 5.6 MB. Exiting the CLI returned 98.3% of the memory; ending the tmux session bought the remaining 1.7% while losing the pane, scrollback and warm reattach. Across the population, 95% was `claude` plus `node` versus 1.8% shell. This is why the app does not make a memory lever destroy sessions.
+
+The control calls `pauseAgentNode(id, false)`, the same Pause session action as the node menu, `performExitPhase`, PAUSED chip and Resume. Do not add a panel-only hibernation path. Use Bulk pause, described in [terminal continuity](tmux-continuity.md), for many sessions. `renderer/lib/sessionPause.ts` decides which rows offer Pause: omit it for a row that can never pause (an orphan, a plain terminal, or an agent that cannot quit and resume), but show it disabled with the reason when the row is only temporarily refused (busy, no session id, or not mounted on this canvas). Canvas answers because only it can see the agent, registered pause closure and `restartEligibility`; it uses the same narrow `st?.sessionId` check as the node menu.
+
+### The Windows session host is a third leg
+
+When tmux is unavailable, `SessionReaperOpts.sessionHost` reaches the reaper, `collectSessionHostMemory` reads the panel's CIM process table, and `collectWin32DevPorts` makes one PowerShell call for ports. The additive `sessionDetails` hello feature carries each session's pid, subscribers, output clock and generation. A failed host read means `ok:false`, no candidates and `unreachable`, never “no sessions”. No running host does mean no sessions. An older host that lists a session but cannot describe it remains an `unmeasured` row (`unmeasuredBackend: 'session-host'`), never dropped. A reap kills exactly the observed generation. `mergeLocalLegs` never replaces an answered leg with a failed one. The tmux path remains unchanged when the session-host backend is not active (`PtyManager.sessionHostListing()` returns `undefined`).
+
+### macOS offscreen release and kernel pressure
+
+Offscreen release detaches a PTY client, making a node a detached tmux session eligible for the reaper after the six-hour grace. macOS previously used `os.freemem()`, which permanently tripped the watermark and culled those sessions on the next sweep. More automatic detaching combined with an always-true pressure signal made sessions appear to disappear. `vm_stat` makes the pool safe again; the grace period was not the fault.
+
+`core/memory-pressure.ts` separately samples `kern.memorystatus_vm_pressure_level` every 30 seconds: 1 normal, 2 warn and 4 critical. `hostMemReader` stays `null` on darwin and main-process RSS never reaches the 4 GB self limit, so the kernel leg is what lets reclaim levers run for a visible Mac window. Call `onKernelPressure` only on escalation. In a dev measurement of 12 hidden warm terminals, GPU footprint fell from 331 to 152 MB and IOSurface from 235 to 91 MB, with all 12 terminals re-granted when panned back.
+
+Never re-fire a held kernel level. A held warning's 60-second floor would reintroduce timed-release pan-back flicker. A drop to normal re-arms the leg, but a run at the same or lower severity waits `KERNEL_LEVER_GAP_MS` (10 minutes); only a higher escalation, warning to critical, fires within that gap. Do not feed the level through `hostMemReader` or `MemInfo`, because `planReap` shares them and that would create a new reaper trigger. Critical runs reclaim levers only, never a reaper sweep, until that action is measured independently. A failed read changes no state.
+
+## Failure semantics for negative facts
+
+A failed read is never evidence of absence. “Could not measure” and “there is nothing” must remain different at every layer; collapsing them produces panels that report no sessions on a host running thirty. When a negative result drives an action, use three answers such as `present | absent | unknown` (`TranscriptPresence` is the model), and only a positive finding should trigger the action. Weigh the recoverable mistake: wrongly resuming a dead session id costs an error line, while wrongly dropping a live id opens a blank conversation over work the user believed was continuing.
+
+`swapTotalMb` and `swapFreeMb` must never be populated on darwin. The reaper's swap term reads them, and a Mac can retain most of its swap for hours, causing all-day reaping. The RAM pill's swap figure belongs in `MemInfo.display`, which nothing else reads.

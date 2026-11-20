@@ -625,3 +625,9 @@ Windows (hook wrapper + .cmd shims; nothing here has run on a device yet)
 36. Draw a context link to a gemini node: the injected note names `context.cmd` with `& `, and
     running it verbatim works.
 ```
+
+## 10. Registry notes from the parity work
+
+- The retired-account banner (`renderer/terminal/gemini-retired.ts`) types and relaunches NOTHING, which is why a letters-and-digits phrase match is enough there, where `resume-fallback.ts` needs three refusals before it acts. `AgentConfig.notice` carries the one-line caveat to the menus and Dock tooltips and is never read to decide behaviour.
+- `readsClaudeTranscript` (`renderer/lib/transcriptGates.ts`) gates the claude-only transcript consumers. `context.ensure` left that gate in 2026-09 (issue #813) once its handler stopped being claude's resolver and routed per agent; see [context meter](context-meter.md). The find bar's transcript index still has no routing and has not moved. Lasting rule: grep every consumer of a helper before adding an id to its list, and when two consumers need different answers, route the one that can be routed instead of widening the gate for both ([adding an agent](adding-an-agent.md)).
+- `AgentSessionNameDeps.geminiPathFor` is held in a `let` in `src/main/index.ts` to avoid a TDZ throw that would kill a node's whole poll chain.

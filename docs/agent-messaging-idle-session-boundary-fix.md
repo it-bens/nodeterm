@@ -25,8 +25,7 @@ delivery, the receiving Claude session started refusing every further message as
 ### 1. An idle agent CLI on a non-tmux backend gets killed by the ordinary memory levers
 
 `src/renderer/terminal/live-work.ts`'s `wouldKillLiveWork` (the shared gate behind offscreen
-release and all three park-eviction levers — see `CLAUDE.md`'s "Every memory lever must ask
-whether the kill ends live work") only protected a node whose `agentState` was
+release and all three park-eviction levers, see [Terminal lifecycle](terminal-lifecycle.md#every-memory-lever-asks-whether-the-kill-ends-live-work)) only protected a node whose `agentState` was
 `working`/`waiting`/`blocked`. A **`done`** agent CLI — an ordinary finished turn, sitting at its
 prompt — read as "nothing running to lose" and was released/parked-and-evicted exactly like a
 plain terminal.
